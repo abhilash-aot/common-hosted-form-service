@@ -7,53 +7,32 @@ interface MapServiceOptions {
   mapContainer: HTMLElement;
   drawOptions: any;
   center: [number, number];
+  form: any;
   component: any; // Replace 'any' with the appropriate type for your form component if known
   value?: { markers: Array<{ lat: number; lng: number }> }; // Optional initial value for the markers
 }
 
+const DEFAULT_MAP_LAYER_URL =
+  'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+const DEFAULT_LAYER_ATTRIBUTION =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+
 export default function MapService(options: MapServiceOptions): void {
   const { mapContainer, center, drawOptions, component, value } = options;
-  console.log('options', options);
   if (mapContainer) {
-    const map = L.map(mapContainer).setView(center, 13);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    }).addTo(map);
+    const { map, drawnItems } = initializeMap(options);
 
-    if (
-      component.form &&
-      component.form[0]?.classList.contains('formbuilder')
-    ) {
-      map.dragging.disable();
-      map.scrollWheelZoom.disable();
-    }
-
-    // Initialize Draw Layer
-    const drawnItems = new L.FeatureGroup();
-    map.addLayer(drawnItems);
-
-    // Add Drawing Controllers
-    const drawControl = new L.Control.Draw({
-      draw: drawOptions,
-      edit: {
-        featureGroup: drawnItems,
-      },
-    });
-
-    // Attach Controls to map
-    map.addControl(drawControl);
-
-    // Event listener for drawn objects
+    //event listener for drawn objects
     map.on('draw:created', function (e) {
-      const type = e.type;
-      const layer = e.layer;
-
+      //console.log(e)
+      let type = e.type;
+      let layer = e.layer;
       drawnItems.addLayer(layer);
+      drawnItems.eachLayer((l) => {
+        console.log(l);
+      });
       updateComponentValue();
     });
-
-    // Function to update the form component value
     const updateComponentValue = () => {
       const markers = [];
       drawnItems.eachLayer((layer) => {
@@ -87,3 +66,31 @@ export default function MapService(options: MapServiceOptions): void {
     });
   }
 }
+
+const initializeMap = (options: MapServiceOptions) => {
+  const { mapContainer, center, drawOptions, form } = options;
+
+  const map = L.map(mapContainer).setView(center, 13);
+  L.tileLayer(DEFAULT_MAP_LAYER_URL, {
+    attribution: DEFAULT_LAYER_ATTRIBUTION,
+  }).addTo(map);
+
+  if (form && form[0]?.classList.contains('formbuilder')) {
+    map.dragging.disable();
+    map.scrollWheelZoom.disable();
+  }
+
+  //Initialize Draw Layer
+  let drawnItems = new L.FeatureGroup();
+  map.addLayer(drawnItems);
+  //Add Drawing Controllers
+  let drawControl = new L.Control.Draw({
+    draw: drawOptions,
+    edit: {
+      featureGroup: drawnItems,
+    },
+  });
+  //Attach Controls to map
+  map.addControl(drawControl);
+  return { map, drawnItems };
+};

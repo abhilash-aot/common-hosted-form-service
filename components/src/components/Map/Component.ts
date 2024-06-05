@@ -1,5 +1,6 @@
 import { Components } from 'formiojs';
 import MapService from './services/MapService';
+import * as L from 'leaflet';
 
 const FieldComponent = (Components as any).components.field;
 
@@ -26,10 +27,15 @@ export default class Component extends (FieldComponent as any) {
     };
   }
 
+  componentID = super.elementInfo().component.id;
   render() {
-    return super.render(`
-      <div id="mapContainer" style="height:400px; z-index:1;"></div>
-    `);
+    console.log(super.data);
+    return super.render(
+      `
+        <div id="map-${this.componentID}" style="height:400px; z-index:1;"></div>
+        
+        `
+    );
   }
 
   attach(element: HTMLElement) {
@@ -37,20 +43,21 @@ export default class Component extends (FieldComponent as any) {
     this.loadMap();
     return superAttach;
   }
-
   loadMap() {
-    const mapContainer = document.getElementById('mapContainer') as HTMLElement;
+    const mapContainer = document.getElementById(`map-${this.componentID}`);
+    const form = document.getElementsByClassName('formio');
+    const value = this.getValue(); // Get the initial value if set
     const drawOptions = {
       circlemarker: false,
       polygon: false,
       polyline: false,
       rectangle: false,
     };
-    const value = this.getValue(); // Get the initial value if set
     MapService({
       mapContainer,
       drawOptions,
       center: CENTER,
+      form,
       component: this,
       value,
     });
@@ -93,5 +100,4 @@ export default class Component extends (FieldComponent as any) {
   }
 }
 
-// Components.addComponent('map', Component);
 export {};
