@@ -108,6 +108,9 @@ const submissionRecord = ref({});
 const version = ref(0);
 const versionIdToSubmitTo = ref(properties.versionId);
 const isAuthorized = ref(true);
+const lastAutosaveTime = ref(null);
+const autosaveInProgress = ref(false);
+const autosaveError = ref(null);
 
 const appStore = useAppStore();
 const authStore = useAuthStore();
@@ -143,6 +146,23 @@ const viewerOptions = computed(() => {
     readOnly: properties.readOnly,
     hooks: {
       beforeSubmit: onBeforeSubmit,
+    },
+    // Add Form.io autosave draft configuration
+    saveDraft:
+      form.value.enableSubmitterDraft &&
+      !properties.readOnly &&
+      canSaveDraft.value,
+    saveDraftThrottle: 10000, // Save every 10 seconds
+
+    // Custom save draft handler
+    saveDraftHandler: async (submission, next) => {
+      try {
+        await handleAutosaveDraft(submission);
+        next(); // Call next to indicate success
+      } catch (error) {
+        console.error('Auto-save draft failed:', error);
+        next(error); // Pass error to Form.io
+      }
     },
     // pass in options for custom components to use
     componentOptions: {
@@ -194,6 +214,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', beforeWindowUnload);
   clearTimeout(downloadTimeout.value);
+  // Cancel any pending autosave operations
+  autosaveInProgress.value = false;
 });
 
 onBeforeUpdate(() => {
@@ -448,8 +470,13 @@ function jsonManager() {
 async function saveDraft() {
   try {
     saving.value = true;
-
-    const response = await sendSubmission(true, submission.value);
+    // If Form.io autosave is enabled, get the current form data
+    let submissionData = submission.value;
+    if (chefForm.value?.formio) {
+      submissionData = chefForm.value.formio.submission;
+    }
+    const response = await sendSubmission(true, submissionData);
+    // const response = await sendSubmission(true, submission.value);
     if (properties.submissionId && properties.submissionId !== null) {
       // Editing an existing draft
       // Update this route with saved flag
@@ -473,6 +500,8 @@ async function saveDraft() {
     }
     showSubmitConfirmDialog.value = false;
     saveDraftDialog.value = false;
+    // Update autosave tracking
+    lastAutosaveTime.value = new Date();
   } catch (error) {
     notificationStore.addNotification({
       text: t('trans.formViewer.savingDraftErrMsg'),
@@ -481,6 +510,80 @@ async function saveDraft() {
         error: error,
       }),
     });
+  }
+}
+// 5. Add watcher to handle form changes and reset autosave status
+watch(
+  () => form.value.enableSubmitterDraft,
+  (newValue) => {
+    if (!newValue) {
+      // Reset autosave state when draft is disabled
+      lastAutosaveTime.value = null;
+      autosaveError.value = null;
+    }
+  }
+);
+
+// 6. Add method to check if autosave is available
+const isAutosaveEnabled = computed(() => {
+  return (
+    form.value.enableSubmitterDraft &&
+    !properties.readOnly &&
+    !properties.preview &&
+    canSaveDraft.value
+  );
+});
+
+// 3. Add the autosave draft handler function
+async function handleAutosaveDraft(submissionData) {
+  if (autosaveInProgress.value) {
+    return; // Prevent concurrent autosave operations
+  }
+
+  try {
+    autosaveInProgress.value = true;
+    autosaveError.value = null;
+
+    // Update the submission data
+    submission.value = { ...submission.value, ...submissionData };
+
+    // Use existing sendSubmission function to save as draft
+    const response = await sendSubmission(true, submission.value);
+
+    // Update last autosave time
+    lastAutosaveTime.value = new Date();
+
+    // If this is a new submission (no submissionId), update the route
+    if (!properties.submissionId && response.data.id) {
+      // Update the URL to reflect the new submission ID without triggering navigation
+      const newQuery = {
+        ...router.currentRoute.value.query,
+        s: response.data.id,
+      };
+      await router.replace({
+        name: router.currentRoute.value.name,
+        query: newQuery,
+      });
+
+      // Update the submissionRecord
+      submissionRecord.value = response.data;
+    }
+
+    console.log('Draft autosaved successfully at:', lastAutosaveTime.value);
+  } catch (error) {
+    autosaveError.value = error;
+    console.error('Autosave draft failed:', error);
+
+    // Optionally show a less intrusive notification for autosave failures
+    notificationStore.addNotification({
+      text: t('trans.formViewer.autosaveDraftFailedMsg'),
+      type: 'warning',
+      timeout: 3000,
+    });
+
+    throw error; // Re-throw to let Form.io handle it
+  } finally {
+    autosaveInProgress.value = false;
   }
 }
 
@@ -907,6 +1010,53 @@ async function uploadFile(file, config = {}) {
             </div>
             <div v-else :class="{ 'mr-2': isRTL }" :lang="locale">
               {{ $t('trans.formViewer.draftSaved') }}
+            </div>
+          </v-alert>
+          <!-- NEW: Autosave status alert -->
+          <v-alert
+            v-if="
+              isAutosaveEnabled &&
+              (autosaveInProgress || lastAutosaveTime || autosaveError)
+            "
+            :class="[
+              autosaveError
+                ? NOTIFICATIONS_TYPES.WARNING.class
+                : NOTIFICATIONS_TYPES.INFO.class,
+              'mb-2',
+            ]"
+            :icon="
+              autosaveError
+                ? NOTIFICATIONS_TYPES.WARNING.icon
+                : autosaveInProgress
+                ? NOTIFICATIONS_TYPES.INFO.icon
+                : NOTIFICATIONS_TYPES.SUCCESS.icon
+            "
+            density="compact"
+          >
+            <div v-if="autosaveInProgress" :class="{ 'mr-2': isRTL }">
+              <v-progress-linear
+                indeterminate
+                color="primary"
+                height="2"
+                class="mb-1"
+              />
+              <span :lang="locale">{{
+                $t('trans.formViewer.autosaveInProgress')
+              }}</span>
+            </div>
+            <div v-else-if="autosaveError" :class="{ 'mr-2': isRTL }">
+              <span :lang="locale">{{
+                $t('trans.formViewer.autosaveDraftFailedMsg')
+              }}</span>
+            </div>
+            <div v-else-if="lastAutosaveTime" :class="{ 'mr-2': isRTL }">
+              <span :lang="locale">
+                {{
+                  $t('trans.formViewer.lastAutosaved', {
+                    time: lastAutosaveTime.toLocaleTimeString(),
+                  })
+                }}
+              </span>
             </div>
           </v-alert>
 
