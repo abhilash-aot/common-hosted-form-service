@@ -14,16 +14,14 @@ const ready = ref(false);
 const route = useRoute();
 const tenantStore = useTenantStore();
 
-function hasPendingRestoreToken() {
-  try {
-    return !!(
-      sessionStorage.getItem('tenantSessionRestore') ||
-      localStorage.getItem('tenantLoginRestore')
-    );
-  } catch (e) {
-    return false;
-  }
-}
+const isTenantRestoring = computed(() => tenantStore.isTenantRestoring);
+
+// Show the centered loader on tenant-scoped routes only — public/submitter
+// routes don't carry tenant context (interceptors.js excludes them) and
+// shouldn't be blocked by a restore happening in another tab.
+const showTenantRestoreLoader = computed(
+  () => isTenantRestoring.value && !route?.meta?.formSubmitMode
+);
 
 const appTitle = computed(() => {
   const base =
@@ -32,14 +30,7 @@ const appTitle = computed(() => {
       : import.meta.env.VITE_TITLE || 'Common Hosted Forms';
 
   if (!tenantStore.isTenantFeatureEnabled) return base;
-  // Suppress the suffix only when an actual tenant restore is in flight.
-  // Personal-CHEFS-only users get "Personal" immediately, no flicker.
-  const restoring =
-    tenantStore.isRestoring ||
-    (!tenantStore.selectedTenant &&
-      tenantStore.loading &&
-      hasPendingRestoreToken());
-  if (restoring) return base;
+  if (isTenantRestoring.value) return base;
 
   const suffix = tenantStore.selectedTenant ? 'Enterprise' : 'Personal';
   return `${base} | ${suffix}`;
@@ -87,7 +78,29 @@ onMounted(async () => {
       <BCGovNavBar :form-submit-mode="isFormSubmitMode" />
       <BCGovEnterpriseBanner :form-submit-mode="isFormSubmitMode" />
       <GlobalStatusOverlay :parent-ready="ready" />
-      <RouterView v-slot="{ Component }">
+      <div
+        v-if="showTenantRestoreLoader"
+        class="tenant-restore-loader main"
+        role="status"
+        aria-live="polite"
+        aria-label="Restoring your enterprise context"
+      >
+        <div class="tenant-restore-card">
+          <v-progress-circular
+            indeterminate
+            color="primary"
+            size="48"
+            width="4"
+          />
+          <div class="tenant-restore-title">
+            Restoring your enterprise context&hellip;
+          </div>
+          <div class="tenant-restore-subtitle">
+            One moment while we reconnect you to your tenant.
+          </div>
+        </div>
+      </div>
+      <RouterView v-else v-slot="{ Component }">
         <transition name="component-fade" mode="out-in">
           <component :is="Component" :class="isWidePage" />
         </transition>
@@ -122,5 +135,44 @@ onMounted(async () => {
 }
 :deep(.v-btn--icon) {
   border-radius: 0px;
+}
+
+.tenant-restore-loader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+  padding: 2rem 1rem;
+  animation: tenant-restore-fade 200ms ease-out;
+}
+
+.tenant-restore-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  text-align: center;
+  max-width: 28rem;
+}
+
+.tenant-restore-title {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: #003366;
+  margin-top: 0.5rem;
+}
+
+.tenant-restore-subtitle {
+  font-size: 0.9rem;
+  color: #555;
+}
+
+@keyframes tenant-restore-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 </style>

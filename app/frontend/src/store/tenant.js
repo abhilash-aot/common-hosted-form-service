@@ -79,6 +79,32 @@ export const useTenantStore = defineStore('tenant', {
     currentTenant: (state) => state.selectedTenant,
 
     /**
+     * True while a post-login tenant restore is in flight. Single source of
+     * truth used by:
+     *   - router guard (waitForTenantContext)
+     *   - App.vue (centered loader, title suffix suppression)
+     *   - BCGovEnterpriseBanner (restoring banner state)
+     *
+     * Three conditions must hold:
+     *   1. No selectedTenant yet — once one is loaded, restore is moot.
+     *   2. isRestoring flag is true (hydrated from storage tokens at boot,
+     *      maintained by fetchTenants while it runs).
+     *   3. User is authenticated and auth is ready — otherwise fetchTenants
+     *      won't be triggered (handleFirstTransition gates on auth), so
+     *      blocking the UI on a restore that will never run causes a
+     *      deadlock. Returning enterprise users with selectedTenant cached
+     *      skip the loader entirely; unauthenticated users see the normal
+     *      login prompt instead of a stuck spinner.
+     */
+    isTenantRestoring: (state) => {
+      if (state.selectedTenant) return false;
+      if (!state.isRestoring) return false;
+      const authStore = useAuthStore();
+      if (!authStore.ready || !authStore.authenticated) return false;
+      return true;
+    },
+
+    /**
      * Get tenant by ID
      */
     getTenantById: (state) => (tenantId) => {
@@ -273,6 +299,7 @@ export const useTenantStore = defineStore('tenant', {
       this.loading = false;
       this.error = null;
       this.serviceDegraded = false;
+      this.isRestoring = false;
       this.persistSelectedTenant();
     },
 
@@ -286,6 +313,7 @@ export const useTenantStore = defineStore('tenant', {
       this.loading = false;
       this.error = null;
       this.serviceDegraded = false;
+      this.isRestoring = false;
       this.persistSelectedTenant();
       this.clearSessionRestore();
     },
