@@ -5,32 +5,60 @@ import { useAuthStore } from '~/store/auth';
 import { useNotificationStore } from '~/store/notification';
 import getRouter from '~/router';
 
+// Safe Web Storage wrappers. Reads/writes/removes can throw when storage is
+// disabled (private browsing, browser security setting) or full (quota
+// exceeded). Restore tokens and the cached selectedTenant are best-effort UX
+// state — on any failure we fall back to "no value", which downgrades to a
+// fresh-login experience without breaking the app.
+function safeStorageGet(storage, key) {
+  try {
+    return storage.getItem(key);
+  } catch (e) {
+    return null;
+  }
+}
+
+function safeStorageSet(storage, key, value) {
+  try {
+    storage.setItem(key, value);
+  } catch (e) {
+    /* swallow: see safeStorageGet — storage may be disabled or full */
+  }
+}
+
+function safeStorageRemove(storage, key) {
+  try {
+    storage.removeItem(key);
+  } catch (e) {
+    /* swallow: see safeStorageGet — storage may be disabled */
+  }
+}
+
+function safeJsonParse(raw) {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    return null;
+  }
+}
+
 // Hydrate selectedTenant and isRestoring synchronously from storage at store
 // creation time. Pinia's state() runs before any component renders, so doing
 // this here prevents the banner/title from flashing "Personal CHEFS" on the
 // first paint of a post-login page load.
 function hydrateSelectedTenant() {
-  try {
-    const stored = localStorage.getItem('selectedTenant');
-    if (stored && stored !== 'null' && stored !== 'undefined') {
-      return JSON.parse(stored);
-    }
-  } catch (e) {
-    // ignore parse errors
-  }
-  return null;
+  const stored = safeStorageGet(localStorage, 'selectedTenant');
+  if (!stored || stored === 'null' || stored === 'undefined') return null;
+  return safeJsonParse(stored);
 }
 
 function hydrateIsRestoring(selectedTenant) {
   // Already have a selectedTenant from localStorage → nothing to restore;
   // render with the known tenant immediately.
   if (selectedTenant) return false;
-  try {
-    if (sessionStorage.getItem('tenantSessionRestore')) return true;
-    if (localStorage.getItem('tenantLoginRestore')) return true;
-  } catch (e) {
-    // ignore
-  }
+  if (safeStorageGet(sessionStorage, 'tenantSessionRestore')) return true;
+  if (safeStorageGet(localStorage, 'tenantLoginRestore')) return true;
   return false;
 }
 
@@ -137,36 +165,48 @@ export const useTenantStore = defineStore('tenant', {
 
   actions: {
     /**
-     * Initialize store - load selected tenant from localStorage
+     * Re-validate the hydrated selectedTenant against the current app/auth
+     * context. Hydration runs synchronously at store creation (before
+     * appStore/authStore are populated) so it can't enforce the feature flag
+     * or BCSC checks. This action runs from App.vue onMounted, after stores
+     * are ready, and clears any tenant that shouldn't be carried forward:
+     *   - feature flag disabled
+     *   - user authenticated via BC Services Card
+     *   - stored value is missing, "null"/"undefined" string, or unparseable
+     * Corrupted entries are also removed from localStorage.
      */
     initializeStore() {
-      if (!this.isTenantFeatureEnabled || this.isBCServicesCardUser) return;
-      try {
-        const stored = localStorage.getItem('selectedTenant');
-        if (stored && stored !== 'null' && stored !== 'undefined') {
-          this.selectedTenant = JSON.parse(stored);
-        }
-      } catch (error) {
-        console.warn('Failed to parse stored tenant, clearing:', error); // eslint-disable-line no-console
-        localStorage.removeItem('selectedTenant');
+      if (!this.isTenantFeatureEnabled || this.isBCServicesCardUser) {
+        this.selectedTenant = null;
+        return;
       }
+      const raw = safeStorageGet(localStorage, 'selectedTenant');
+      if (!raw || raw === 'null' || raw === 'undefined') {
+        this.selectedTenant = null;
+        return;
+      }
+      const parsed = safeJsonParse(raw);
+      if (parsed === null) {
+        // Corrupted entry — clear it so the user gets a clean slate next load.
+        safeStorageRemove(localStorage, 'selectedTenant');
+        this.selectedTenant = null;
+        return;
+      }
+      this.selectedTenant = parsed;
     },
 
     /**
      * Save selected tenant to localStorage
      */
     persistSelectedTenant() {
-      try {
-        if (this.selectedTenant) {
-          localStorage.setItem(
-            'selectedTenant',
-            JSON.stringify(this.selectedTenant)
-          );
-        } else {
-          localStorage.removeItem('selectedTenant');
-        }
-      } catch (error) {
-        console.warn('Failed to persist tenant to localStorage:', error); // eslint-disable-line no-console
+      if (this.selectedTenant) {
+        safeStorageSet(
+          localStorage,
+          'selectedTenant',
+          JSON.stringify(this.selectedTenant)
+        );
+      } else {
+        safeStorageRemove(localStorage, 'selectedTenant');
       }
     },
 
@@ -344,31 +384,21 @@ export const useTenantStore = defineStore('tenant', {
       const userId = this.currentUserIdForRestore();
       const tenantId = this.selectedTenant?.id;
       if (!userId || !tenantId) return;
-      try {
-        sessionStorage.setItem(
-          'tenantSessionRestore',
-          JSON.stringify({ userId, tenantId })
-        );
-      } catch (e) {
-        // ignore storage errors (e.g. private browsing quota)
-      }
+      safeStorageSet(
+        sessionStorage,
+        'tenantSessionRestore',
+        JSON.stringify({ userId, tenantId })
+      );
     },
 
     getSessionRestore() {
-      try {
-        const raw = sessionStorage.getItem('tenantSessionRestore');
-        return raw ? JSON.parse(raw) : null;
-      } catch (e) {
-        return null;
-      }
+      return safeJsonParse(
+        safeStorageGet(sessionStorage, 'tenantSessionRestore')
+      );
     },
 
     clearSessionRestore() {
-      try {
-        sessionStorage.removeItem('tenantSessionRestore');
-      } catch (e) {
-        // ignore
-      }
+      safeStorageRemove(sessionStorage, 'tenantSessionRestore');
     },
 
     /**
@@ -382,31 +412,19 @@ export const useTenantStore = defineStore('tenant', {
       const userId = this.currentUserIdForRestore();
       const tenantId = this.selectedTenant?.id;
       if (!userId || !tenantId) return;
-      try {
-        localStorage.setItem(
-          'tenantLoginRestore',
-          JSON.stringify({ userId, tenantId })
-        );
-      } catch (e) {
-        // ignore storage errors
-      }
+      safeStorageSet(
+        localStorage,
+        'tenantLoginRestore',
+        JSON.stringify({ userId, tenantId })
+      );
     },
 
     getLoginRestore() {
-      try {
-        const raw = localStorage.getItem('tenantLoginRestore');
-        return raw ? JSON.parse(raw) : null;
-      } catch (e) {
-        return null;
-      }
+      return safeJsonParse(safeStorageGet(localStorage, 'tenantLoginRestore'));
     },
 
     clearLoginRestore() {
-      try {
-        localStorage.removeItem('tenantLoginRestore');
-      } catch (e) {
-        // ignore
-      }
+      safeStorageRemove(localStorage, 'tenantLoginRestore');
     },
   },
 });

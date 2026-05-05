@@ -78,11 +78,9 @@ onMounted(async () => {
       <BCGovNavBar :form-submit-mode="isFormSubmitMode" />
       <BCGovEnterpriseBanner :form-submit-mode="isFormSubmitMode" />
       <GlobalStatusOverlay :parent-ready="ready" />
-      <div
+      <output
         v-if="showTenantRestoreLoader"
         class="tenant-restore-loader main"
-        role="status"
-        aria-live="polite"
         aria-label="Restoring your enterprise context"
       >
         <div class="tenant-restore-card">
@@ -99,7 +97,7 @@ onMounted(async () => {
             One moment while we reconnect you to your tenant.
           </div>
         </div>
-      </div>
+      </output>
       <RouterView v-else v-slot="{ Component }">
         <transition name="component-fade" mode="out-in">
           <component :is="Component" :class="isWidePage" />
